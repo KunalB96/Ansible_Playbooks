@@ -1,0 +1,141 @@
+---
+- name: Deploy Apache Web Server with SSL
+  hosts: webservers
+  become: true
+  gather_facts: true
+
+  vars:
+    domain_name: example.com
+    server_admin: admin@example.com
+    document_root: /var/www/html/example
+    ssl_cert_path: /etc/ssl/certs
+    ssl_key_path: /etc/ssl/private
+
+  tasks:
+
+    - name: Install Apache and SSL packages
+      yum:
+        name:
+          - httpd
+          - mod_ssl
+          - openssl
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Create document root
+      file:
+        path: "{{ document_root }}"
+        state: directory
+        owner: apache
+        group: apache
+        mode: "0755"
+      when: ansible_os_family == "RedHat"
+
+    - name: Deploy website content
+      copy:
+        dest: "{{ document_root }}/index.html"
+        owner: apache
+        group: apache
+        mode: "0644"
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head><title>Welcome to {{ domain_name }}</title></head>
+          <body>
+            <h1>Welcome to {{ domain_name }}</h1>
+            <p>Server: {{ ansible_hostname }}</p>
+          </body>
+          </html>
+      when: ansible_os_family == "RedHat"
+
+    - name: Configure Apache HTTP virtual host
+      copy:
+        dest: "/etc/httpd/conf.d/{{ domain_name }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          <VirtualHost *:80>
+            ServerName {{ domain_name }}
+            ServerAdmin {{ server_admin }}
+            DocumentRoot {{ document_root }}
+            <Directory {{ document_root }}>
+              Require all granted
+            </Directory>
+            ErrorLog /var/log/httpd/{{ domain_name }}-error.log
+            CustomLog /var/log/httpd/{{ domain_name }}-access.log combined
+          </VirtualHost>
+      when: ansible_os_family == "RedHat"
+      notify: restart apache
+
+    - name: Ensure SSL directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ ssl_cert_path }}"
+        - "{{ ssl_key_path }}"
+      when: ansible_os_family == "RedHat"
+
+    - name: Generate self-signed SSL certificate
+      command: >
+        openssl req -new -newkey rsa:2048 -nodes -x509 -days 365
+        -subj "/CN={{ domain_name }}"
+        -keyout {{ ssl_key_path }}/{{ domain_name }}.key
+        -out {{ ssl_cert_path }}/{{ domain_name }}.crt
+      args:
+        creates: "{{ ssl_cert_path }}/{{ domain_name }}.crt"
+      when: ansible_os_family == "RedHat"
+
+    - name: Configure Apache HTTPS virtual host
+      copy:
+        dest: "/etc/httpd/conf.d/{{ domain_name }}-ssl.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          <VirtualHost *:443>
+            ServerName {{ domain_name }}
+            ServerAdmin {{ server_admin }}
+            DocumentRoot {{ document_root }}
+            SSLEngine on
+            SSLCertificateFile {{ ssl_cert_path }}/{{ domain_name }}.crt
+            SSLCertificateKeyFile {{ ssl_key_path }}/{{ domain_name }}.key
+            <Directory {{ document_root }}>
+              Require all granted
+            </Directory>
+          </VirtualHost>
+      when: ansible_os_family == "RedHat"
+      notify: restart apache
+
+    - name: Start and enable Apache
+      service:
+        name: httpd
+        state: started
+        enabled: yes
+      when: ansible_os_family == "RedHat"
+
+    - name: Verify Apache is running
+      uri:
+        url: "http://{{ ansible_default_ipv4.address }}"
+        status_code: 200
+      register: apache_check
+      ignore_errors: yes
+
+    - name: Display Apache status
+      debug:
+        msg: >
+          Apache is {{
+            'running'
+            if apache_check is defined and apache_check.status == 200
+            else 'not responding'
+          }}
+
+  handlers:
+    - name: restart apache
+      service:
+        name: httpd
+        state: restarted
