@@ -12,10 +12,12 @@ Fundamental operations, ideal for beginners.
 
 ## **1. Ping All Hosts**
 
-```yaml
+---
 - hosts: all
   tasks:
-    - ansible.builtin.ping:
+    - name: Ping all hosts
+      ansible.builtin.ping:
+
 ```
 
 ---
